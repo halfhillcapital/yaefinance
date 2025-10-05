@@ -1,2 +1,2 @@
-# MediaWiki Search MCP Server
-Provides tools to search MediaWiki sites and retrieve page content in Markdown format.
+# yaefinance
+Provides tools to provide real-time finance and trading data.
