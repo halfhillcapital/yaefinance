@@ -1,2 +1,2 @@
 # yaefinance
-Provides tools to provide real-time finance and trading data.
+Provides tools to Y.A.E. to access real-time finance and trading data.
