@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 import pandas as pd
 import yfinance as yf
@@ -37,7 +38,6 @@ def _day_key(dt_str: str | None) -> str | None:
     if dt_str is None:
         return None
     try:
-        from datetime import datetime
         dt = datetime.fromisoformat(str(dt_str))
         return dt.strftime("%A, %m/%d/%Y")
     except (ValueError, TypeError):
@@ -45,8 +45,6 @@ def _day_key(dt_str: str | None) -> str | None:
 
 
 def sync_earnings_calendar() -> None:
-    from datetime import datetime
-
     log.info("Syncing market earnings calendar")
     try:
         cal = yf.Calendars()
