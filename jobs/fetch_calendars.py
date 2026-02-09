@@ -80,26 +80,36 @@ def sync_earnings_calendar() -> None:
             log.warning("No earnings calendar data returned")
             return
 
-        # Group new items by day
-        new_by_day: dict[str, dict[str, dict]] = {}
+        # Group new items by day → company → symbol
+        new_by_day: dict[str, dict[str, dict[str, dict]]] = {}
         for item in items:
             key = _day_key(item.get("date"))
             if key is None:
                 continue
-            new_by_day.setdefault(key, {})
-            new_by_day[key][item["symbol"]] = item
+            company = item.get("company") or item["symbol"]
+            new_by_day.setdefault(key, {}).setdefault(company, {})
+            new_by_day[key][company][item["symbol"]] = item
 
-        # Merge with existing data
+        # Merge with existing data (dict[day, dict[company, list[item]]])
         existing = read_json(calendar_path("earnings")) or {}
         if isinstance(existing, list):
             existing = {}  # migrate from old flat-list format
 
-        for day, sym_map in new_by_day.items():
+        for day, company_map in new_by_day.items():
             if day not in existing:
-                existing[day] = []
-            existing_by_sym = {e["symbol"]: e for e in existing[day]}
-            existing_by_sym.update(sym_map)
-            existing[day] = list(existing_by_sym.values())
+                existing[day] = {}
+            # Migrate old flat-list format for this day
+            if isinstance(existing[day], list):
+                migrated: dict[str, list[dict]] = {}
+                for e in existing[day]:
+                    c = e.get("company") or e["symbol"]
+                    migrated.setdefault(c, []).append(e)
+                existing[day] = migrated
+            for company, sym_map in company_map.items():
+                existing_items = existing[day].get(company, [])
+                existing_by_sym = {e["symbol"]: e for e in existing_items}
+                existing_by_sym.update(sym_map)
+                existing[day][company] = list(existing_by_sym.values())
 
         # Sort keys by date descending (latest first)
         sorted_data = dict(
@@ -107,7 +117,8 @@ def sync_earnings_calendar() -> None:
         )
 
         write_json(calendar_path("earnings"), sorted_data)
-        log.info("Synced %d earnings calendar items across %d days", sum(len(v) for v in sorted_data.values()), len(sorted_data))
+        total = sum(len(e) for day in sorted_data.values() for e in day.values())
+        log.info("Synced %d earnings calendar items across %d days", total, len(sorted_data))
     except Exception:
         log.error("Failed to sync earnings calendar", exc_info=True)
 
