@@ -55,7 +55,7 @@ def sync_earnings_calendar() -> None:
         while True:
             df = cal.get_earnings_calendar(
                 limit=100, offset=offset,
-                market_cap=500_000_000, filter_most_active=False,
+                market_cap=1_000_000_000, filter_most_active=False,
             )
             if df is None or df.empty:
                 break
