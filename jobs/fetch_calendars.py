@@ -4,8 +4,10 @@ import logging
 
 import pandas as pd
 import yfinance as yf
+import curl_cffi as curl
 
 from storage import calendar_path, read_json, write_json
+from jobs.parsers.forexfactory import extract_calendar_table, parse_economic_calendar
 
 log = logging.getLogger(__name__)
 
@@ -122,6 +124,45 @@ def sync_earnings_calendar() -> None:
     except Exception:
         log.error("Failed to sync earnings calendar", exc_info=True)
 
+def sync_economics_calendar() -> None:
+    try:
+        log.info("Syncing economic events calendar")
+        url = "https://www.forexfactory.com/calendar"
+        response = curl.get(url, impersonate="chrome")
+        if response.status_code != 200:
+            log.warning("Failed to fetch economics calendar: HTTP %d", response.status_code)
+            return
+        table = extract_calendar_table(response.text)
+        events = parse_economic_calendar(table)
+        if not events:
+            log.warning("No economic events found in calendar data")
+            return
+
+        # Group by date
+        by_day: dict[str, list[dict]] = {}
+        for ev in events:
+            day = ev.get("date") or "Unknown"
+            by_day.setdefault(day, []).append(ev)
+
+        # Merge with existing data (keyed by event name within each day)
+        existing = read_json(calendar_path("economics")) or {}
+        if not isinstance(existing, dict):
+            existing = {}
+
+        for day, day_events in by_day.items():
+            prev = {e["event"]: e for e in existing.get(day, []) if e.get("event")}
+            for ev in day_events:
+                if ev.get("event"):
+                    prev[ev["event"]] = ev
+            existing[day] = list(prev.values())
+
+        write_json(calendar_path("economics"), existing)
+        total = sum(len(v) for v in existing.values())
+        log.info("Synced %d economic events across %d days", total, len(existing))
+    except Exception:
+        log.error("Failed to sync economic events calendar", exc_info=True)
+
 
 def sync_all_calendars() -> None:
     sync_earnings_calendar()
+    sync_economics_calendar()
