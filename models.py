@@ -42,7 +42,6 @@ class SplitRecord(BaseModel):
 
 class EarningsCalendarItem(BaseModel):
     symbol: str
-    company: str | None = None
     marketcap: float | None = None
     event_name: str | None = None
     date: datetime | None = None

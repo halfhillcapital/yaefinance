@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas as pd
 import yfinance as yf
@@ -24,6 +24,11 @@ def _nan_to_none(val):
     return val
 
 
+def _merge_record(old: dict, new: dict) -> dict:
+    """Merge new into old, keeping existing values when new value is None."""
+    return {k: v if v is not None else old.get(k) for k, v in new.items()}
+
+
 def _df_to_records(df: pd.DataFrame) -> list[dict]:
     df = df.reset_index()
     records = df.to_dict(orient="records")
@@ -33,24 +38,24 @@ def _df_to_records(df: pd.DataFrame) -> list[dict]:
     ]
 
 
-def _day_key(dt_str: str | None) -> str | None:
-    """Format a date string as 'DayName, MM/DD/YYYY'."""
-    if dt_str is None:
+def _day_key(dt) -> str | None:
+    """Format a datetime-like value as 'DayName, MM/DD/YYYY'."""
+    if dt is None:
         return None
     try:
-        dt = datetime.fromisoformat(str(dt_str))
         return dt.strftime("%A, %m/%d/%Y")
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, AttributeError):
         return None
 
 
 def sync_earnings_calendar() -> None:
     log.info("Syncing market earnings calendar")
     try:
-        cal = yf.Calendars()
+        yesterday = datetime.now() - timedelta(days=1)
+        cal = yf.Calendars(start=yesterday)
 
-        # Paginate to collect all results (yfinance caps at 100 per call)
-        items: list[dict] = []
+        # Paginate and group by day → company → symbol
+        new_by_day: dict[str, dict[str, dict[str, dict]]] = {}
         offset = 0
         while True:
             df = cal.get_earnings_calendar(
@@ -61,9 +66,10 @@ def sync_earnings_calendar() -> None:
                 break
             records = _df_to_records(df)
             for r in records:
-                items.append({
-                    "symbol": r.get("Symbol") or r.get("index", ""),
-                    "company": r.get("Company"),
+                sym = r.get("Symbol") or r.get("index", "")
+                company = r.get("Company") or sym
+                item = {
+                    "symbol": sym,
                     "marketcap": r.get("Marketcap"),
                     "event_name": r.get("Event Name"),
                     "date": r.get("Event Start Date"),
@@ -71,44 +77,37 @@ def sync_earnings_calendar() -> None:
                     "eps_estimate": r.get("EPS Estimate"),
                     "reported_eps": r.get("Reported EPS"),
                     "surprise_pct": r.get("Surprise(%)"),
-                })
+                }
+                key = _day_key(item["date"])
+                if key is None:
+                    continue
+                new_by_day.setdefault(key, {}).setdefault(company, {})
+                if sym in new_by_day[key][company]:
+                    new_by_day[key][company][sym] = _merge_record(new_by_day[key][company][sym], item)
+                else:
+                    new_by_day[key][company][sym] = item
             if len(records) < 100:
                 break
             offset += 100
 
-        if not items:
+        if not new_by_day:
             log.warning("No earnings calendar data returned")
             return
 
-        # Group new items by day → company → symbol
-        new_by_day: dict[str, dict[str, dict[str, dict]]] = {}
-        for item in items:
-            key = _day_key(item.get("date"))
-            if key is None:
-                continue
-            company = item.get("company") or item["symbol"]
-            new_by_day.setdefault(key, {}).setdefault(company, {})
-            new_by_day[key][company][item["symbol"]] = item
-
         # Merge with existing data (dict[day, dict[company, list[item]]])
-        existing = read_json(calendar_path("earnings")) or {}
-        if isinstance(existing, list):
-            existing = {}  # migrate from old flat-list format
+        existing: dict[str, dict[str, list[dict]]] = read_json(calendar_path("earnings")) or {}  # type: ignore[assignment]
 
         for day, company_map in new_by_day.items():
             if day not in existing:
                 existing[day] = {}
-            # Migrate old flat-list format for this day
-            if isinstance(existing[day], list):
-                migrated: dict[str, list[dict]] = {}
-                for e in existing[day]:
-                    c = e.get("company") or e["symbol"]
-                    migrated.setdefault(c, []).append(e)
-                existing[day] = migrated
             for company, sym_map in company_map.items():
                 existing_items = existing[day].get(company, [])
                 existing_by_sym = {e["symbol"]: e for e in existing_items}
-                existing_by_sym.update(sym_map)
+                for sym, new_item in sym_map.items():
+                    if sym in existing_by_sym:
+                        existing_by_sym[sym] = _merge_record(existing_by_sym[sym], new_item)
+                    else:
+                        existing_by_sym[sym] = new_item
                 existing[day][company] = list(existing_by_sym.values())
 
         # Sort keys by date descending (latest first)
@@ -151,7 +150,10 @@ def sync_economics_calendar() -> None:
             prev = {e["event"]: e for e in existing.get(day, []) if e.get("event")}
             for ev in day_events:
                 if ev.get("event"):
-                    prev[ev["event"]] = ev
+                    if ev["event"] in prev:
+                        prev[ev["event"]] = _merge_record(prev[ev["event"]], ev)
+                    else:
+                        prev[ev["event"]] = ev
             existing[day] = list(prev.values())
 
         write_json(calendar_path("economics"), existing)
