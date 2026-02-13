@@ -1,2 +1,2 @@
-# yaefinance
-Provides tools to Y.A.E. to access real-time finance and trading data.
+# Kitsune Finance
+Provides tools to AI agents to access real-time finance and trading data.
